@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<result>
+	<status>OK</status>
+	<message></message>
+	<countryCode>US</countryCode>
+	<zoneName>America/New_York</zoneName>
+	<abbreviation>EST</abbreviation>
+	<gmtOffset>-18000</gmtOffset>
+	<dst>0</dst>
+	<timestamp>102412800</timestamp>
+</result>
