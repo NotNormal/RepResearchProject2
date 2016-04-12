@@ -5,11 +5,17 @@ library('XML')
 library('RJSONIO')
 
 # API_KEY for timezonedb.com (free).
-TZDB_API_KEY="VHAD5XMMMDQK"
+TZDB_API_KEY <<- "VHAD5XMMMDQK"
 # API_KEY for Google Geocoding (free).
-G_API_KEY="AIzaSyD8b0PZzbiYHjXe9f7LyzQLt5VgO-WSBwg"
+#G_API_KEY <<- "AIzaSyD8b0PZzbiYHjXe9f7LyzQLt5VgO-WSBwg"
+G_API_KEY <<- "AIzaSyB5tftkQwmZ49JKKnS4zkRmsIFvHEWIZxc"
 
+CACHED_GOOGLE_DATA <<- list()
+###############################################################################
 # HELPER FUNCTIONS
+###############################################################################
+
+# Return proper name for the timezone.
 tzconv <- function(x) {
   if (x['TIME_ZONE']=="CDT") {
     x['ZONENAMES'] = "America/Chicago"
@@ -22,7 +28,7 @@ tzconv <- function(x) {
   } else if (x['TIME_ZONE']=="GMT") {
     x['ZONENAMES'] = "GMT"
   } else if (x['TIME_ZONE']=="HST") {
-    x['ZONENAMES'] = "Hawaii-Aleutian Time"
+    x['ZONENAMES'] = "Pacific/Honolulu"
   } else if (x['TIME_ZONE']=="MDT") {
     x['ZONENAMES'] = "America/Denver"
   } else if (x['TIME_ZONE']=="MST") {
@@ -31,10 +37,6 @@ tzconv <- function(x) {
     x['ZONENAMES'] = "America/Los_Angeles"
   } else if (x['TIME_ZONE']=="PST") {
     x['ZONENAMES'] = "America/Los_Angeles"
-  } else if (x['TIME_ZONE']=="SCT") {
-    x['ZONENAMES'] = "Seychelles Time"
-  } else if (x['TIME_ZONE']=="SST") {
-    x['ZONENAMES'] = "Samoa Standard Time"
   } else if (x['TIME_ZONE']=="UTC") {
     x['ZONENAMES'] = "UTC"
   } else {
@@ -42,58 +44,162 @@ tzconv <- function(x) {
   }
 }
 
+# Non-standard US abbreviation or no timezone provided. Let's figure it out.
 timezonedb <- function(x) {
-  if (str_trim(x['LATITUDE']) == 0 && str_trim(x['LONGITUDE']) == 0) {
+  if (as.numeric(x['LATITUDE']) == 0 && as.numeric(x['LONGITUDE']) == 0) {
     url = sprintf("https://maps.googleapis.com/maps/api/geocode/json?address=%s&key=%s", str_trim(x['STATE']), G_API_KEY)
-    print(paste("Getting response from: ", url))
-    response <- fromJSON(url)
-    results = response$results
-    results = results[[1]]
     
-    x['LATITUDE'] <- as.numeric(results$geometry$location['lat'])*100
-    x['LONGITUDE'] <- as.numeric(results$geometry$location['lng'])*100
-    print(sprintf("Received response with lat: %f and lng:%f", x['LATITUDE'], x['LONGITUDE']))
+    results = CACHED_GOOGLE_DATA[[url]]
+    
+    if (is.null(results)) {
+      print('No LAT/LNG data provided. Using Google to fetch data based on state.')
+      response = gethttpresponse(url, 3)
+      results = response$results
+      results = results[[1]]
+      
+      x['LATITUDE'] = results$geometry$location['lat']*100
+      x['LONGITUDE'] = results$geometry$location['lng']*-100
+      
+      CACHED_GOOGLE_DATA[url] <<- list(url = c(x['LATITUDE'], x['LONGITUDE']))
+      print(sprintf("Received response with lat: %f and lng:%f", results$geometry$location['lat'], results$geometry$location['lng']))
+    } else {
+      print('No LAT/LNG data provided. Using cached Google data based on state.')
+      x['LATITUDE'] = results[['LATITUDE']]
+      x['LONGITUDE'] = results[['LONGITUDE']]
+    }
   }
-  url = sprintf("http://api.timezonedb.com/?lat=%f&lng=-%f&time=%d&key=%s", as.numeric(x['LATITUDE'])/100, as.numeric(x['LONGITUDE'])/100, gettimestamp(x), TZDB_API_KEY)
-  print(paste("Getting response from timezonedb using: ", url))
-  response = getURL(url)
+  url = sprintf("http://api.timezonedb.com/?format=json&lat=%f&lng=%f&time=%.0f&key=%s", as.numeric(x['LATITUDE'])/100, as.numeric(x['LONGITUDE'])/-100, gettimestamp(x), TZDB_API_KEY)
+  response = gethttpresponse(url, 3)
+
+  Sys.sleep(1) # I don't like this.
   
-  if (length(response) > 0 && grep('<status>OK</status>', response[1]) == 1) {
-    response = tryCatch(xmlTreeParse(response, useInternalNodes = TRUE), error = function(e) { print(response) })
-    
-    x['ZONENAMES'] = xmlValue(xmlChildren(xmlChildren(response)$result)$zoneName)
+  if(response$status == 'OK') {
+    x['ZONENAMES'] = response$zoneName
   } else {
-    print('Bad response from timezonedb: ' + response)
+    print(paste('Bad response from timezonedb: ', response))
   }
 }
 
-gettimestamp <- function(x) {
-  datetime = paste(str_split(str_trim(x['BGN_DATE']), ' ', 2)[[1]][1], str_trim(x['BGN_TIME']), sep = ' ')
-  # Just getting the UNIX timestamp, timezone doesn't really matter here.
-  timestamp = strptime(datetime, format = "%m/%d/%Y %H%M", tz="GMT")
-  as.numeric(timestamp)
+gethttpresponse <- function(url, numretries) {
+  print(paste("Getting HTTP response from: ", url))
+  tries = 0
+  response = NA
+  while(tries < numretries && is.na(response)) {
+    response <- tryCatch({
+      fromJSON(getURLContent(url), asText = TRUE)
+    },
+    error = function(e) {
+      print(paste("Error: \n", e, "\nTrying again..."))
+      tries = tries + 1
+      if(tries == numretries) {
+        stop(e)
+      }
+      Sys.sleep(1)
+      return(NA)
+    }, 
+    warning = function(e) {
+      print(paste("Warning: \n", e, "\nTrying again..."))
+      tries = tries + 1
+      if(tries == numretries) {
+        stop(e)
+      }
+      Sys.sleep(1)
+      return(NA)
+    }
+    )
+  }
+  return(response)
 }
 
+# Convert date time to UNIX-epoch timestamp.
+gettimestamp <- function(x) {
+  if (str_trim(x['BGN_DATE']) != '') {
+    datetime = paste(str_split(str_trim(x['BGN_DATE']), ' ', 2)[[1]][1], str_trim(x['BGN_TIME']), sep = ' ')
+    format = getdatetimeformat(x['BGN_DATE'], x['BGN_TIME'])
+    
+    # Just getting the UNIX timestamp, timezone doesn't really matter here.
+    timestamp_begin = strptime(datetime, format = format, tz="GMT")
+    
+    if(is.na(as.numeric(timestamp_begin))) {
+      stop(x)
+    }
+    
+    return(as.numeric(timestamp_begin))
+  }
+}
+
+getdatetimeformat <- function(date, time) {
+  if (str_trim(date) != '' && str_trim(time) != '') {
+    format = "%m/%d/%Y %H%M%S"
+    datetime = paste(str_split(str_trim(date), ' ', 2)[[1]][1], str_trim(time), sep = ' ')
+    timestamp = strptime(datetime, format = format, tz="GMT")
+    
+    if(is.na(as.numeric(timestamp))) {
+      format = "%m/%d/%Y %H:%M:%S"
+      timestamp = strptime(datetime, format = format, tz="GMT")
+    }
+    
+    if(is.na(as.numeric(timestamp))) {
+      format = "%m/%d/%Y %H%M"
+      timestamp = strptime(datetime, format = format, tz="GMT")
+    }
+    
+    if(is.na(as.numeric(timestamp))) {
+      format = "%m/%d/%Y %H:%M"
+      timestamp = strptime(datetime, format = format, tz="GMT")
+    }
+    
+    if(is.na(as.numeric(timestamp))) {
+      format = "%m/%d/%Y %I:%M:%S %p"
+      timestamp = strptime(datetime, format = format, tz="GMT")
+    }
+    
+    if(is.na(as.numeric(timestamp))) {
+      format = "%m/%d/%Y %I:%M %p"
+      timestamp = strptime(datetime, format = format, tz="GMT")
+    }
+  } else {
+    stop(date, time)
+  }
+  return(format)
+}
+
+# Convert dates and times to POSIXct timestamps
 createbegintimestamps <- function(x) {
   if (str_trim(x['BGN_DATE']) != '') {
     datetime = paste(str_split(str_trim(x['BGN_DATE']), ' ', 2)[[1]][1], str_trim(x['BGN_TIME']), sep = ' ')
-    x['BGN_TIMESTAMP'] = strptime(datetime, format = "%m/%d/%Y %H%M", tz=str_trim(x['ZONENAMES']))
+    format = getdatetimeformat(x['BGN_DATE'], x['BGN_TIME'])
+    
+    x['BGN_TIMESTAMP'] = as.POSIXct(strptime(datetime, format = format, tz=str_trim(x['ZONENAMES'])))
+  } else {
+    x['BGN_TIMESTAMP'] = NA
   }
+  return(x['BGN_TIMESTAMP'])
 }
 
+# Convert dates and times to POSIXct timestamps
 createendtimestamps <- function(x) {
   if (str_trim(x['END_DATE']) != '') {
     datetime = paste(str_split(str_trim(x['END_DATE']), ' ', 2)[[1]][1], str_trim(x['END_TIME']), sep = ' ')
-    x['END_TIMESTAMP'] = strptime(datetime, format = "%m/%d/%Y %H%M", tz=str_trim(x['ZONENAMES']))
+    format = getdatetimeformat(x['END_DATE'], x['END_TIME'])
+    
+    x['END_TIMESTAMP'] = as.POSIXct(strptime(datetime, format = "%m/%d/%Y %H%M", tz=str_trim(x['ZONENAMES'])), origin = '1970-01-01')
+  } else {
+    x['END_TIMESTAMP'] = NA
   }
+  return(x['END_TIMESTAMP'])
 }
+
+###############################################################################
 # BEGIN PROCESSING
+###############################################################################
 
 # Download (if necessary) and load data.
 dir.create(file.path('.', 'data'), showWarnings = FALSE)
 
 if(!file.exists('data/repdata-data-StormData.csv.bz2')) {
   download.file('https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2', './data/repdata-data-StormData.csv.bz2')
+  unzip('./data/repdata-data-StormData.csv.bz2', exdir = './data/', unzip = 'bzip2')
 }
 
 readsizeof = 20000
@@ -103,11 +209,52 @@ classes = c("numeric", "character", "character", "character", "numeric", "charac
 processeddata = data.frame()
 
 for (skip in seq(0,numrecords+readsizeof, by=readsizeof)) {
-  tmpdata = read.csv(bzfile('./data/repdata-data-StormData.csv.bz2'), skip = skip, nrows = readsizeof, colClasses = classes, col.names = columnnames)
-  zonenames = apply(tmpdata, 1, tzconv)
-  tmpdata$ZONENAMES = zonenames
+  tmpdata = read.csv('./data/repdata-data-StormData.csv', skip = skip, nrows = readsizeof, colClasses = classes, col.names = columnnames)
+  
+  # Replace known bad values
+  tmpdata$BGN_TIME <- gsub('O', '0', tmpdata$BGN_TIME)
+  tmpdata$END_TIME <- gsub('O', '0', tmpdata$END_TIME)
+  
+  # Normalize timestamps so data can be compared.
+  
+  tmpdata[c("BGN_TIMESTAMP", "END_TIMESTAMP")] <- NA
+  tmpdata$BGN_TIMESTAMP <- as.POSIXct(tmpdata$BGN_TIMESTAMP)
+  tmpdata$END_TIMESTAMP <- as.POSIXct(tmpdata$END_TIMESTAMP)
+  
+  tmpdata$ZONENAMES = apply(tmpdata, 1, tzconv)
   tmpdata$BGN_TIMESTAMP = apply(tmpdata, 1, createbegintimestamps)
   tmpdata$END_TIMESTAMP = apply(tmpdata, 1, createendtimestamps)
-  processeddata = rbind.data.frame(processeddata, tmpdata)
-  print("end loop")
+  
+  # Check BGN_TIMESTAMP < END_TIMESTAMP
+
+  processeddata = rbind(processeddata, tmpdata)
 }
+
+processeddata$EVTYPE = toupper(processeddata$EVTYPE)
+processeddata$EVTYPE = as.factor(processeddata$EVTYPE)
+
+processeddata$PROPDMGEXP = toupper(processeddata$PROPDMGEXP)
+processeddata$PROPDMGEXP = as.factor(processeddata$PROPDMGEXP)
+
+processeddata$CROPDMGEXP = toupper(processeddata$CROPDMGEXP)
+processeddata$CROPDMGEXP = as.factor(processeddata$CROPDMGEXP)
+
+###############################################################################
+# Answer Questions
+###############################################################################
+
+# Across the United States, which types of events (as indicated in the 𝙴𝚅𝚃𝚈𝙿𝙴 variable) are most harmful with respect to population health?
+
+tapply(processeddata$FATALITIES, processeddata$EVTYPE, sum)
+tapply(processeddata$INJURIES, processeddata$EVTYPE, sum)
+
+tapply(processeddata$FATALITIES, processeddata$EVTYPE, mean)
+tapply(processeddata$INJURIES, processeddata$EVTYPE, mean)
+
+# Across the United States, which types of events have the greatest economic consequences?
+
+tapply(processeddata$CROPDMGEXP, processeddata$EVTYPE, sum)
+tapply(processeddata$PROPDMGEXP, processeddata$EVTYPE, sum)
+
+tapply(processeddata$CROPDMGEXP, processeddata$EVTYPE, mean)
+tapply(processeddata$PROPDMGEXP, processeddata$EVTYPE, mean)
