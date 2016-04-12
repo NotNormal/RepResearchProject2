@@ -129,9 +129,14 @@ gettimestamp <- function(x) {
 }
 
 getdatetimeformat <- function(date, time) {
-  if (str_trim(date) != '' && str_trim(time) != '') {
+  if (str_trim(date) != '') {
+    datetime = str_trim(date)
+    if (str_trim(time) != '') {
+      datetime = paste(str_split(str_trim(date), ' ', 2)[[1]][1], str_trim(time), sep = ' ')
+    }
+    
     format = "%m/%d/%Y %H%M%S"
-    datetime = paste(str_split(str_trim(date), ' ', 2)[[1]][1], str_trim(time), sep = ' ')
+    
     timestamp = strptime(datetime, format = format, tz="GMT")
     
     if(is.na(as.numeric(timestamp))) {
@@ -159,7 +164,7 @@ getdatetimeformat <- function(date, time) {
       timestamp = strptime(datetime, format = format, tz="GMT")
     }
   } else {
-    stop(date, time)
+    stop(paste('Date: ', date, ' Time: ', time))
   }
   return(format)
 }
@@ -199,6 +204,7 @@ dir.create(file.path('.', 'data'), showWarnings = FALSE)
 
 if(!file.exists('data/repdata-data-StormData.csv.bz2')) {
   download.file('https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2', './data/repdata-data-StormData.csv.bz2')
+  # TODO: FIX
   unzip('./data/repdata-data-StormData.csv.bz2', exdir = './data/', unzip = 'bzip2')
 }
 
@@ -208,7 +214,7 @@ columnnames = c("STATE__", "BGN_DATE", "BGN_TIME", "TIME_ZONE", "COUNTY", "COUNT
 classes = c("numeric", "character", "character", "character", "numeric", "character", "character", "character", "numeric", "character", "character", "character", "character", "numeric", "logical", "numeric", "character", "character", "numeric", "numeric", "character", "numeric", "numeric", "numeric", "numeric", "character", "numeric", "character", "character", "character", "character", "numeric", "numeric", "numeric", "numeric", "character", "numeric")
 processeddata = data.frame()
 
-for (skip in seq(0,numrecords+readsizeof, by=readsizeof)) {
+initprocesseddata <- function(skip, readsizeof) {
   tmpdata = read.csv('./data/repdata-data-StormData.csv', skip = skip, nrows = readsizeof, colClasses = classes, col.names = columnnames)
   
   # Replace known bad values
@@ -226,8 +232,22 @@ for (skip in seq(0,numrecords+readsizeof, by=readsizeof)) {
   tmpdata$END_TIMESTAMP = apply(tmpdata, 1, createendtimestamps)
   
   # Check BGN_TIMESTAMP < END_TIMESTAMP
+  
+  return(tmpdata)
+}
 
-  processeddata = rbind(processeddata, tmpdata)
+for (skip in seq(0,numrecords+readsizeof, by=readsizeof)) {
+  tryCatch ({
+    tmpdata = initprocesseddata(skip = skip, readsizeof = readsizeof)
+    processeddata = rbind(processeddata, tmpdata)
+    remove(tmpdata)
+  },
+  error=function(e) {
+    stop(e)
+  },
+  warning=function(e) {
+    stop(e)
+  })
 }
 
 processeddata$EVTYPE = toupper(processeddata$EVTYPE)
