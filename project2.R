@@ -208,46 +208,42 @@ if(!file.exists('data/repdata-data-StormData.csv.bz2')) {
   unzip('./data/repdata-data-StormData.csv.bz2', exdir = './data/', unzip = 'bzip2')
 }
 
-readsizeof = 20000
-numrecords = length(read.csv(bzfile('./data/repdata-data-StormData.csv.bz2'))[,1])
 columnnames = c("STATE__", "BGN_DATE", "BGN_TIME", "TIME_ZONE", "COUNTY", "COUNTYNAME", "STATE", "EVTYPE", "BGN_RANGE", "BGN_AZI", "BGN_LOCATI", "END_DATE", "END_TIME", "COUNTY_END", "COUNTYENDN", "END_RANGE", "END_AZI", "END_LOCATI", "LENGTH", "WIDTH", "F", "MAG", "FATALITIES", "INJURIES", "PROPDMG", "PROPDMGEXP", "CROPDMG", "CROPDMGEXP", "WFO", "STATEOFFIC", "ZONENAMES", "LATITUDE", "LONGITUDE", "LATITUDE_E", "LONGITUDE_", "REMARKS", "REFNUM")
 classes = c("numeric", "character", "character", "character", "numeric", "character", "character", "character", "numeric", "character", "character", "character", "character", "numeric", "logical", "numeric", "character", "character", "numeric", "numeric", "character", "numeric", "numeric", "numeric", "numeric", "character", "numeric", "character", "character", "character", "character", "numeric", "numeric", "numeric", "numeric", "character", "numeric")
 processeddata = data.frame()
 
-initprocesseddata <- function(skip, readsizeof) {
-  tmpdata = read.csv('./data/repdata-data-StormData.csv', skip = skip, nrows = readsizeof, colClasses = classes, col.names = columnnames)
-  
+initprocesseddata <- function(x) {
   # Replace known bad values
-  tmpdata$BGN_TIME <- gsub('O', '0', tmpdata$BGN_TIME)
-  tmpdata$END_TIME <- gsub('O', '0', tmpdata$END_TIME)
+  x$BGN_TIME <- gsub('O', '0', x$BGN_TIME)
+  x$END_TIME <- gsub('O', '0', x$END_TIME)
   
   # Normalize timestamps so data can be compared.
   
-  tmpdata[c("BGN_TIMESTAMP", "END_TIMESTAMP")] <- NA
-  tmpdata$BGN_TIMESTAMP <- as.POSIXct(tmpdata$BGN_TIMESTAMP)
-  tmpdata$END_TIMESTAMP <- as.POSIXct(tmpdata$END_TIMESTAMP)
-  
-  tmpdata$ZONENAMES = apply(tmpdata, 1, tzconv)
-  tmpdata$BGN_TIMESTAMP = apply(tmpdata, 1, createbegintimestamps)
-  tmpdata$END_TIMESTAMP = apply(tmpdata, 1, createendtimestamps)
+  x[c("BGN_TIMESTAMP", "END_TIMESTAMP")] <- NA
+  x$BGN_TIMESTAMP <- as.POSIXct(x$BGN_TIMESTAMP)
+  x$END_TIMESTAMP <- as.POSIXct(x$END_TIMESTAMP)
+
+  x$ZONENAMES = apply(x, 1, tzconv)
+  x$BGN_TIMESTAMP = apply(x, 1, createbegintimestamps)
+  x$END_TIMESTAMP = apply(x, 1, createendtimestamps)
   
   # Check BGN_TIMESTAMP < END_TIMESTAMP
   
-  return(tmpdata)
+  return(x)
 }
 
-for (skip in seq(0,numrecords+readsizeof, by=readsizeof)) {
-  tryCatch ({
-    tmpdata = initprocesseddata(skip = skip, readsizeof = readsizeof)
-    processeddata = rbind(processeddata, tmpdata)
-    remove(tmpdata)
-  },
-  error=function(e) {
-    stop(e)
-  },
-  warning=function(e) {
-    stop(e)
-  })
+rawdata = read.csv('./data/repdata-data-StormData.csv', colClasses = classes, col.names = columnnames)
+numrecords = length(rawdata[,1])
+readsizeof = 20000
+offset = 0
+
+for (begin in seq(1, numrecords, by=20000)) {
+  end = begin + readsizeof - 1
+  
+  tmpdata = initprocesseddata(rawdata[begin:end, ])
+  processeddata = rbind(processeddata, tmpdata)
+  remove(tmpdata)
+  offset = offset + 20000
 }
 
 processeddata$EVTYPE = toupper(processeddata$EVTYPE)
