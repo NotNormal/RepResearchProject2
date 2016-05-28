@@ -1,0 +1,6 @@
+.Rproj.user
+.Ruserdata
+.Rhistory
+.RData
+**/.DS_Store 
+data/repdata-data-StormData.csv
